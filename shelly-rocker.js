@@ -41,11 +41,26 @@ Shelly.addEventHandler(function (ev) {
         brightness[lid] = 100;
         Shelly.call("Light.Set", { id: lid, on: true, brightness: 100 });
       } else {
+        dpFired[key] = false; // new gesture: drop any stale double press flag
         dpTimers[key] = Timer.set(DOUBLE_PRESS_WINDOW, false, function () {
           dpTimers[key] = null;
         });
       }
     }
+
+  } else if (e === "double_push") {
+    // The firmware reports a double press instead of single_push, so this is
+    // where dpFired must be cleared. Also covers presses slower than
+    // DOUBLE_PRESS_WINDOW that the firmware still counts as a double.
+    if (dir > 0) {
+      if (!dpFired[key]) {
+        brightness[lid] = 100;
+        Shelly.call("Light.Set", { id: lid, on: true, brightness: 100 });
+      }
+    } else {
+      Shelly.call("Light.Set", { id: lid, on: false });
+    }
+    dpFired[key] = false;
 
   } else if (e === "single_push") {
     if (timers[key]) { Timer.clear(timers[key]); timers[key] = null; }
