@@ -10,9 +10,10 @@ A Shelly script for centre-retractive rocker switches (e.g. Corston) wired to a 
 | Bottom | Double press | Turn on at 100% |
 | Bottom | Hold | Dim up |
 | Top | Single press | Turn off |
+| Top | Double press | Turn on at the light's minimum + 10% (night light) |
 | Top | Hold | Dim down |
 
-Brightness is floored at 1% when dimming down. Holding while the light is off turns it on at the last brightness and dims up from there.
+Brightness is floored at the light's own minimum when dimming down: `range_map[0]` from the device's light settings, read at startup and at the start of each gesture (never below `DIM_MIN_BRIGHTNESS`, 1%). Set `range_map` per light to the lowest level that fitting actually shows. Holding while the light is off turns it on at the last brightness and dims up from there.
 
 ## Requirements
 

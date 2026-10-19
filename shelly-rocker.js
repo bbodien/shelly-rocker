@@ -1,5 +1,7 @@
 // Shelly Pro Dimmer 2PM - corston centre-retractive rocker behaviour
 // Top button: single press = turn off, hold = dim down (floors at DIM_MIN_BRIGHTNESS)
+//             double press = turn on at the light's minimum + NIGHT_OFFSET (night light)
+// The minimum is each light's own range_map[0], read from the device (at least DIM_MIN_BRIGHTNESS).
 // Bottom button: single press = turn on, hold = dim up (turns on at last brightness if off)
 //               double press = turn on at 100% brightness
 // Requires output type set to Detached on both channels.
@@ -8,6 +10,7 @@ const DIM_STEP = 1;              // % per tick
 const DIM_INTERVAL = 75;         // ms between steps
 const DIM_MIN_BRIGHTNESS = 1;    // % to start at when dimming up from off
 const DOUBLE_PRESS_WINDOW = 400; // ms window to detect a second btn_down
+const NIGHT_OFFSET = 10;         // % above the light's minimum for the top double press (night light)
 
 // component -> [light id, direction: -1=off/down, +1=on/up]
 let INPUT_CFG = {
@@ -22,6 +25,22 @@ let dimActive = {};  // guards against btn_up racing the initial GetStatus
 let brightness = {}; // locally tracked brightness per light id
 let dpTimers = {};   // double press window timers per key
 let dpFired = {};    // suppresses single_push that follows a detected double press
+let minB = {};       // per-light minimum brightness (range_map[0]) read from the device
+
+// Lowest brightness this fitting can usefully show: the light's own range_map
+// minimum, but never below DIM_MIN_BRIGHTNESS.
+function floorOf(lid) {
+  let m = minB[lid] || 0;
+  return m > DIM_MIN_BRIGHTNESS ? m : DIM_MIN_BRIGHTNESS;
+}
+
+function loadMin(lid) {
+  Shelly.call("Light.GetConfig", { id: lid }, function (res) {
+    if (res && res.range_map) minB[lid] = res.range_map[0];
+  });
+}
+
+for (let k in INPUT_CFG) loadMin(INPUT_CFG[k][0]);
 
 Shelly.addEventHandler(function (ev) {
   let cfg = INPUT_CFG[ev.component];
@@ -32,33 +51,31 @@ Shelly.addEventHandler(function (ev) {
   let e = ev.info.event;
   let key = ev.component;
 
+  // Double press target: bottom = 100%, top = the light's minimum + NIGHT_OFFSET
+  let dpLevel = dir > 0 ? 100 : Math.min(100, floorOf(lid) + NIGHT_OFFSET);
+
   if (e === "btn_down") {
-    if (dir > 0) {
-      if (dpTimers[key]) {
-        // Second press within window — double press
-        Timer.clear(dpTimers[key]); dpTimers[key] = null;
-        dpFired[key] = true;
-        brightness[lid] = 100;
-        Shelly.call("Light.Set", { id: lid, on: true, brightness: 100 });
-      } else {
-        dpFired[key] = false; // new gesture: drop any stale double press flag
-        dpTimers[key] = Timer.set(DOUBLE_PRESS_WINDOW, false, function () {
-          dpTimers[key] = null;
-        });
-      }
+    if (dpTimers[key]) {
+      // Second press within window — double press
+      Timer.clear(dpTimers[key]); dpTimers[key] = null;
+      dpFired[key] = true;
+      brightness[lid] = dpLevel;
+      Shelly.call("Light.Set", { id: lid, on: true, brightness: dpLevel });
+    } else {
+      dpFired[key] = false; // new gesture: drop any stale double press flag
+      loadMin(lid);         // pick up range_map changes made in the Shelly UI
+      dpTimers[key] = Timer.set(DOUBLE_PRESS_WINDOW, false, function () {
+        dpTimers[key] = null;
+      });
     }
 
   } else if (e === "double_push") {
     // The firmware reports a double press instead of single_push, so this is
     // where dpFired must be cleared. Also covers presses slower than
     // DOUBLE_PRESS_WINDOW that the firmware still counts as a double.
-    if (dir > 0) {
-      if (!dpFired[key]) {
-        brightness[lid] = 100;
-        Shelly.call("Light.Set", { id: lid, on: true, brightness: 100 });
-      }
-    } else {
-      Shelly.call("Light.Set", { id: lid, on: false });
+    if (!dpFired[key]) {
+      brightness[lid] = dpLevel;
+      Shelly.call("Light.Set", { id: lid, on: true, brightness: dpLevel });
     }
     dpFired[key] = false;
 
@@ -80,7 +97,8 @@ Shelly.addEventHandler(function (ev) {
       brightness[lid] = res.brightness;
       timers[key] = Timer.set(DIM_INTERVAL, true, function () {
         let b = brightness[lid] + dir * DIM_STEP;
-        b = b < DIM_MIN_BRIGHTNESS ? DIM_MIN_BRIGHTNESS : b > 100 ? 100 : b;
+        let lo = floorOf(lid);
+        b = b < lo ? lo : b > 100 ? 100 : b;
         brightness[lid] = b;
         Shelly.call("Light.Set", { id: lid, brightness: b });
       });
